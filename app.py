@@ -3,79 +3,34 @@ import json
 import os
 import random
 from datetime import datetime
+from openai import OpenAI
 
 st.set_page_config(
-    page_title="baguaingjing",
+    page_title="易经八卦",
     page_icon="☯",
     layout="wide"
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
+WUXING_IMAGE = os.path.join(ASSETS_DIR, "yinyang_wuxing.jpg")
+BAGUA_IMAGE = os.path.join(ASSETS_DIR, "bagua.jpeg")
 
 os.makedirs(DATA_DIR, exist_ok=True)
-
+os.makedirs(ASSETS_DIR, exist_ok=True)
 
 TRIGRAMS = {
-    "乾": {
-        "symbol": "☰",
-        "lines": [1, 1, 1],
-        "nature": "天",
-        "meaning": "刚健、创造、主动",
-        "desc": "乾卦象征天，常用来表示创造力、进取心与领导性。"
-    },
-    "兑": {
-        "symbol": "☱",
-        "lines": [1, 1, 0],
-        "nature": "泽",
-        "meaning": "喜悦、交流、和悦",
-        "desc": "兑卦象征泽，强调表达、沟通、愉悦与互动。"
-    },
-    "离": {
-        "symbol": "☲",
-        "lines": [1, 0, 1],
-        "nature": "火",
-        "meaning": "光明、依附、明辨",
-        "desc": "离卦象征火，常联系到光明、认知、判断与文明。"
-    },
-    "震": {
-        "symbol": "☳",
-        "lines": [1, 0, 0],
-        "nature": "雷",
-        "meaning": "发动、惊醒、开端",
-        "desc": "震卦象征雷，强调行动、启动与变化的开端。"
-    },
-    "巽": {
-        "symbol": "☴",
-        "lines": [0, 1, 1],
-        "nature": "风",
-        "meaning": "进入、渗透、柔顺",
-        "desc": "巽卦象征风，也可联系木，强调渐进影响与柔和进入。"
-    },
-    "坎": {
-        "symbol": "☵",
-        "lines": [0, 1, 0],
-        "nature": "水",
-        "meaning": "险陷、流动、智慧",
-        "desc": "坎卦象征水，常联系困难、流动、谨慎与应变能力。"
-    },
-    "艮": {
-        "symbol": "☶",
-        "lines": [0, 0, 1],
-        "nature": "山",
-        "meaning": "止、界限、沉静",
-        "desc": "艮卦象征山，强调停止、节制、边界与反思。"
-    },
-    "坤": {
-        "symbol": "☷",
-        "lines": [0, 0, 0],
-        "nature": "地",
-        "meaning": "柔顺、承载、包容",
-        "desc": "坤卦象征地，强调承载、配合、滋养与稳定。"
-    }
+    "乾": {"symbol": "☰", "lines": [1, 1, 1], "nature": "天", "meaning": "刚健、创造、主动", "desc": "乾卦象征天，常用来表示创造力、进取心与领导性。"},
+    "兑": {"symbol": "☱", "lines": [1, 1, 0], "nature": "泽", "meaning": "喜悦、交流、和悦", "desc": "兑卦象征泽，强调表达、沟通、愉悦与互动。"},
+    "离": {"symbol": "☲", "lines": [1, 0, 1], "nature": "火", "meaning": "光明、依附、明辨", "desc": "离卦象征火，常联系到光明、认知、判断与文明。"},
+    "震": {"symbol": "☳", "lines": [1, 0, 0], "nature": "雷", "meaning": "发动、惊醒、开端", "desc": "震卦象征雷，强调行动、启动与变化的开端。"},
+    "巽": {"symbol": "☴", "lines": [0, 1, 1], "nature": "风", "meaning": "进入、渗透、柔顺", "desc": "巽卦象征风，也可联系木，强调渐进影响与柔和进入。"},
+    "坎": {"symbol": "☵", "lines": [0, 1, 0], "nature": "水", "meaning": "险陷、流动、智慧", "desc": "坎卦象征水，常联系困难、流动、谨慎与应变能力。"},
+    "艮": {"symbol": "☶", "lines": [0, 0, 1], "nature": "山", "meaning": "止、界限、沉静", "desc": "艮卦象征山，强调停止、节制、边界与反思。"},
+    "坤": {"symbol": "☷", "lines": [0, 0, 0], "nature": "地", "meaning": "柔顺、承载、包容", "desc": "坤卦象征地，强调承载、配合、滋养与稳定。"}
 }
-
 
 HEXAGRAMS = [
     {"no": 1, "name": "乾", "upper": "乾", "lower": "乾", "summary": "元亨利贞，象征创造与刚健。"},
@@ -144,7 +99,6 @@ HEXAGRAMS = [
     {"no": 64, "name": "未济", "upper": "离", "lower": "坎", "summary": "尚未完成，强调继续调整。"}
 ]
 
-
 def load_notes():
     if not os.path.exists(NOTES_FILE):
         return []
@@ -154,25 +108,18 @@ def load_notes():
     except Exception:
         return []
 
-
 def save_notes(notes):
     with open(NOTES_FILE, "w", encoding="utf-8") as f:
         json.dump(notes, f, ensure_ascii=False, indent=2)
 
-
 def trigram_lines_to_text(lines):
     result = []
     for line in lines:
-        if line == 1:
-            result.append("──────")
-        else:
-            result.append("──  ──")
+        result.append("──────" if line == 1 else "──  ──")
     return "\n".join(result[::-1])
-
 
 def hexagram_lines(upper, lower):
     return TRIGRAMS[lower]["lines"] + TRIGRAMS[upper]["lines"]
-
 
 def lines_to_display(lines):
     arr = []
@@ -180,13 +127,11 @@ def lines_to_display(lines):
         arr.append("──────" if v == 1 else "──  ──")
     return "\n".join(arr)
 
-
 def find_hexagram(upper, lower):
     for h in HEXAGRAMS:
         if h["upper"] == upper and h["lower"] == lower:
             return h
     return None
-
 
 def transform_hexagram(lines, moving_line):
     changed = lines[:]
@@ -194,13 +139,11 @@ def transform_hexagram(lines, moving_line):
     changed[idx] = 0 if changed[idx] == 1 else 1
     return changed
 
-
 def lines_to_trigram_name(lines3):
     for name, info in TRIGRAMS.items():
         if info["lines"] == lines3:
             return name
     return None
-
 
 def changed_hexagram_from_move(upper, lower, moving_line):
     original = hexagram_lines(upper, lower)
@@ -212,7 +155,6 @@ def changed_hexagram_from_move(upper, lower, moving_line):
     result_hex = find_hexagram(upper_name, lower_name)
     return original, changed, upper_name, lower_name, result_hex
 
-
 def add_history_record(title):
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -220,28 +162,97 @@ def add_history_record(title):
     st.session_state.history.insert(0, f"{ts} - {title}")
     st.session_state.history = st.session_state.history[:20]
 
+def get_openrouter_client():
+    api_key = st.secrets.get("OPENROUTER_API_KEY", "") if hasattr(st, "secrets") else ""
+    if not api_key:
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return None, "未找到 OPENROUTER_API_KEY。请在 .streamlit/secrets.toml 或环境变量中设置。"
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1"
+    )
+    return client, ""
+
+def get_model_name():
+    if hasattr(st, "secrets") and "MODEL_NAME" in st.secrets:
+        return st.secrets["MODEL_NAME"]
+    return os.environ.get("MODEL_NAME", "google/gemini-2.5-flash-lite")
+
+def ai_interpret(question, upper, lower, moving_line, original_hex, changed_hex):
+    client, err = get_openrouter_client()
+    if err:
+        return None, err
+
+    model_name = get_model_name()
+    changed_name = changed_hex["name"] if changed_hex else "未知"
+    changed_summary = changed_hex["summary"] if changed_hex else "暂无"
+
+    prompt = f"""
+你是一名中文易经学习助手。
+任务：对用户给出的卦象做学习型解释，可以直接给出对问题的理解与建议，但不要写成迷信营销文案。
+
+用户问题：
+{question}
+
+本卦：
+- 名称：{original_hex['name']}
+- 卦序：{original_hex['no']}
+- 上卦：{upper}
+- 下卦：{lower}
+- 动爻：第 {moving_line} 爻
+- 简释：{original_hex['summary']}
+
+之卦：
+- 名称：{changed_name}
+- 简释：{changed_summary}
+
+请用简体中文输出，结构如下：
+1. 卦象概览
+2. 对当前问题的解读
+3. 可参考的行动方向
+4. 简短提醒
+
+要求：
+- 语言自然清楚
+- 不要故弄玄虚
+- 不要输出“百分之百确定”
+- 可以给出方向性建议
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "你是一个清晰、克制、自然的中文助手。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.6
+        )
+        text = response.choices[0].message.content
+        return text, ""
+    except Exception as e:
+        return None, f"调用 AI 失败：{e}"
 
 def render_home():
     add_history_record("浏览：首页")
-    st.title("☯ baguaingjing")
-    st.subheader("易经八卦互动学习应用")
+    st.title("☯ 易经八卦")
+    st.subheader("阴阳、五行、八卦、六十四卦互动学习")
 
-    st.info("本项目用于文化与学习用途，帮助理解易经、八卦与六十四卦的基本结构，不构成确定性预测或专业建议。")
+    if os.path.exists(WUXING_IMAGE):
+        st.image(WUXING_IMAGE, caption="阴阳五行图", width="stretch")
 
     col1, col2 = st.columns([2, 1])
-
     with col1:
         st.markdown("""
 ### 项目简介
-`baguaingjing` 是一个面向学习者的中文互动应用，内容聚焦于：
+本应用聚焦于：
 - 易经基础概念
 - 八卦与六十四卦结构
-- 变卦的基本演示
-- 互动测验与学习笔记
-
-本应用强调文化理解、历史背景与结构化学习，不把易经包装成绝对化的结论工具。
+- 变卦演示
+- AI辅助解卦
+- 学习笔记整理
         """)
-
     with col2:
         daily = random.choice(HEXAGRAMS)
         st.markdown("### 今日一卦")
@@ -249,51 +260,56 @@ def render_home():
         st.write(f"上卦：{daily['upper']}　下卦：{daily['lower']}")
         st.write(daily["summary"])
 
-    st.markdown("### 最近学习记录")
-    history = st.session_state.get("history", [])
-    if history:
-        for item in history[:8]:
-            st.write(f"- {item}")
-    else:
-        st.write("目前还没有学习记录。")
+def render_theory_image():
+    add_history_record("浏览：理论图解")
+    st.title("理论图解")
 
+    st.markdown("""
+### 阴阳与五行
+阴阳与五行是传统文化中常见的关系框架，可用于理解变化、平衡、制约与生成。
+
+### 八卦结构
+八卦由三个爻组成，象征不同自然属性与关系逻辑；两个八卦上下组合，形成六十四卦。
+    """)
+
+    if os.path.exists(WUXING_IMAGE):
+        st.image(WUXING_IMAGE, caption="阴阳五行图", width="stretch")
+    else:
+        st.warning("尚未找到图片文件：assets/yinyang_wuxing.jpg")
+
+    if os.path.exists(BAGUA_IMAGE):
+        st.image(BAGUA_IMAGE, caption="八卦图", width="stretch")
+    else:
+        st.warning("尚未找到图片文件：assets/bagua.jpeg")
+
+    st.markdown("""
+### 学习提示
+- 相生可理解为促进、支持、延展
+- 相克可理解为制衡、限制、调节
+- 八卦可理解为结构化观察世界的一种传统表达方式
+    """)
 
 def render_basics():
     add_history_record("浏览：易经基础")
     st.title("易经基础")
-
     st.markdown("""
 ### 阴阳
-阴阳是中国传统思想中的基本范畴，可理解为事物中相对、互补、流动变化的两个方面。  
-在卦象中，阳爻通常用实线表示，阴爻通常用断线表示。
+阴阳可以理解为事物中相对、互补、流动变化的两个方面。
 
 ### 八卦
-八卦由三个爻组成，共有八种基本组合。  
-两个三爻卦上下相叠，形成六爻卦，即六十四卦的基础。
+八卦由三个阴阳爻组合而成，共有八种基本形式。
 
 ### 六十四卦
-六十四卦并不是孤立的符号集合，而是由八卦两两组合构成的结构系统。  
-学习时可先理解“卦象结构”，再理解“名称与含义”。
-
-### 学习建议
-建议先学会八卦名称、自然象征与基本意义，再进入六十四卦和变卦。
+两个三爻卦上下相叠，构成六爻卦，即六十四卦的结构基础。
     """)
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("阴阳两类爻", "2")
-    col2.metric("八卦", "8")
-    col3.metric("六十四卦", "64")
-
 
 def render_trigrams():
     add_history_record("浏览：八卦图谱")
     st.title("八卦图谱")
-
     selected = st.selectbox("选择一个八卦", list(TRIGRAMS.keys()))
     info = TRIGRAMS[selected]
 
     col1, col2 = st.columns([1, 2])
-
     with col1:
         st.markdown(f"## {selected} {info['symbol']}")
         st.code(trigram_lines_to_text(info["lines"]))
@@ -302,32 +318,18 @@ def render_trigrams():
         st.write(f"**关键词：** {info['meaning']}")
         st.write(f"**说明：** {info['desc']}")
 
-    st.markdown("### 八卦总览")
-    cols = st.columns(4)
-    items = list(TRIGRAMS.items())
-    for i, (name, item) in enumerate(items):
-        with cols[i % 4]:
-            st.markdown(f"**{name} {item['symbol']}**")
-            st.code(trigram_lines_to_text(item["lines"]))
-            st.caption(f"{item['nature']}｜{item['meaning']}")
-
-
 def render_hexagrams():
     add_history_record("浏览：六十四卦")
     st.title("六十四卦")
-
     search_mode = st.radio("查询方式", ["按编号", "按卦名", "按上下卦"], horizontal=True)
-
     result = None
 
     if search_mode == "按编号":
         no = st.number_input("输入卦序号", min_value=1, max_value=64, value=1, step=1)
         result = next((h for h in HEXAGRAMS if h["no"] == no), None)
-
     elif search_mode == "按卦名":
         name = st.selectbox("选择卦名", [h["name"] for h in HEXAGRAMS])
         result = next((h for h in HEXAGRAMS if h["name"] == name), None)
-
     else:
         upper = st.selectbox("选择上卦", list(TRIGRAMS.keys()), key="hex_upper")
         lower = st.selectbox("选择下卦", list(TRIGRAMS.keys()), key="hex_lower")
@@ -344,7 +346,6 @@ def render_hexagrams():
             st.write(f"**下卦：** {result['lower']}（{TRIGRAMS[result['lower']]['nature']}）")
             st.write(f"**简释：** {result['summary']}")
 
-
 def render_change_demo():
     add_history_record("浏览：变卦演示")
     st.title("变卦演示")
@@ -357,13 +358,11 @@ def render_change_demo():
     original_lines, changed_lines, upper_name, lower_name, changed_hex = changed_hexagram_from_move(upper, lower, moving_line)
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.markdown("### 本卦")
         if original_hex:
             st.write(f"**第 {original_hex['no']} 卦：{original_hex['name']}**")
         st.code(lines_to_display(original_lines))
-
     with col2:
         st.markdown("### 之卦")
         if changed_hex:
@@ -374,97 +373,56 @@ def render_change_demo():
             st.write("暂未找到对应之卦。")
         st.code(lines_to_display(changed_lines))
 
-    st.caption("说明：这里的演示用于帮助理解卦象变化的结构，不代表确定性的现实判断。")
+def render_ai_divination():
+    add_history_record("浏览：AI算卦解卦")
+    st.title("AI算卦解卦")
 
+    mode = st.radio("起卦方式", ["手动起卦", "随机起卦"], horizontal=True)
 
-def render_content_pages():
-    add_history_record("浏览：历史 / 理论 / 实践")
-    st.title("历史 / 理论 / 实践")
+    if mode == "手动起卦":
+        upper = st.selectbox("选择上卦", list(TRIGRAMS.keys()), key="ai_upper")
+        lower = st.selectbox("选择下卦", list(TRIGRAMS.keys()), key="ai_lower")
+        moving_line = st.slider("选择动爻", 1, 6, 1, key="ai_line")
+    else:
+        upper = random.choice(list(TRIGRAMS.keys()))
+        lower = random.choice(list(TRIGRAMS.keys()))
+        moving_line = random.randint(1, 6)
+        st.info(f"随机结果：上卦 {upper}｜下卦 {lower}｜动爻 第 {moving_line} 爻")
 
-    tab1, tab2, tab3 = st.tabs(["历史", "理论", "实践"])
+    question = st.text_area("请输入你想问的问题", placeholder="例如：我最近的工作发展方向应该怎样调整？")
 
-    with tab1:
-        st.markdown("""
-### 历史
-《易经》长期被视为中国传统经典之一，而八卦则是其最具代表性的符号系统之一。  
-在历史发展中，易学不仅影响占筮传统，也深刻影响中国哲学、文化表达、政治语言和日常思维方式。  
-现代学习者在接触易经时，更适合把它理解为一种古代思想与符号体系，而不是简单地把它等同于神秘结论。
-        """)
+    original_hex = find_hexagram(upper, lower)
+    original_lines, changed_lines, upper_name, lower_name, changed_hex = changed_hexagram_from_move(upper, lower, moving_line)
 
-    with tab2:
-        st.markdown("""
-### 理论
-八卦由三个阴阳爻组合而成，分别对应不同的自然象征与抽象意义。  
-两个八卦上下叠加后构成六爻卦，形成六十四种组合，这种结构体现了“变化”“关系”“位置”和“时机”的思想。  
-学习理论时，建议先理解卦象结构、阴阳变化和上下关系，再阅读卦名与释义。
-        """)
+    st.markdown("### 卦象结果")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write(f"**本卦：** 第 {original_hex['no']} 卦 {original_hex['name']}")
+        st.write(original_hex["summary"])
+        st.code(lines_to_display(original_lines))
+    with c2:
+        if changed_hex:
+            st.write(f"**之卦：** 第 {changed_hex['no']} 卦 {changed_hex['name']}")
+            st.write(changed_hex["summary"])
+        else:
+            st.write("**之卦：** 暂未找到")
+        st.code(lines_to_display(changed_lines))
 
-    with tab3:
-        st.markdown("""
-### 实践
-现代人学习易经八卦，可以把它用于文化理解、语言分析、哲学思考和结构化反思。  
-例如，在阅读古籍、分析传统观念、理解象征表达时，八卦提供了一套很有代表性的观察框架。  
-本项目强调的是学习用途、思考工具和文化素养，而不是迷信化应用。
-        """)
-
-
-def init_quiz():
-    if "quiz" not in st.session_state:
-        h = random.choice(HEXAGRAMS)
-        st.session_state.quiz = {
-            "question": h,
-            "options": random.sample([x["name"] for x in HEXAGRAMS], 4),
-            "answered": False,
-            "result": ""
-        }
-        if h["name"] not in st.session_state.quiz["options"]:
-            st.session_state.quiz["options"][0] = h["name"]
-            random.shuffle(st.session_state.quiz["options"])
-
-
-def reset_quiz():
-    if "quiz" in st.session_state:
-        del st.session_state["quiz"]
-    init_quiz()
-
-
-def render_quiz():
-    add_history_record("浏览：互动测验")
-    st.title("互动测验")
-
-    init_quiz()
-    q = st.session_state.quiz
-    h = q["question"]
-
-    st.write("请根据上下卦判断卦名。")
-    st.write(f"上卦：**{h['upper']}**　下卦：**{h['lower']}**")
-    st.code(lines_to_display(hexagram_lines(h["upper"], h["lower"])))
-
-    choice = st.radio("请选择正确卦名", q["options"], key="quiz_choice")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("提交答案"):
-            q["answered"] = True
-            if choice == h["name"]:
-                q["result"] = f"回答正确：第 {h['no']} 卦 {h['name']}。{h['summary']}"
+    if st.button("生成 AI 解读", type="primary"):
+        if not question.strip():
+            st.warning("请先输入一个问题。")
+        else:
+            with st.spinner("AI 正在生成解读..."):
+                result, err = ai_interpret(question, upper, lower, moving_line, original_hex, changed_hex)
+            if err:
+                st.error(err)
             else:
-                q["result"] = f"回答错误。正确答案是：第 {h['no']} 卦 {h['name']}。{h['summary']}"
-
-    with col2:
-        if st.button("换一题"):
-            reset_quiz()
-            st.rerun()
-
-    if q["answered"]:
-        st.success(q["result"])
-
+                st.markdown("### AI 解读")
+                st.write(result)
 
 def render_notes():
     add_history_record("浏览：学习笔记")
     st.title("学习笔记")
-
     notes = load_notes()
 
     with st.form("note_form", clear_on_submit=True):
@@ -496,29 +454,29 @@ def render_notes():
     else:
         st.write("目前还没有笔记。")
 
-
 def main():
     st.sidebar.title("导航菜单")
     page = st.sidebar.radio(
         "请选择页面",
         [
             "首页",
+            "理论图解",
             "易经基础",
             "八卦图谱",
             "六十四卦",
             "变卦演示",
-            "历史 / 理论 / 实践",
-            "互动测验",
+            "AI算卦解卦",
             "学习笔记"
         ]
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("baguaingjing｜易经八卦互动学习应用")
-    st.sidebar.caption("用途：文化与学习，不构成确定性预测。")
+    st.sidebar.caption("易经八卦互动应用")
 
     if page == "首页":
         render_home()
+    elif page == "理论图解":
+        render_theory_image()
     elif page == "易经基础":
         render_basics()
     elif page == "八卦图谱":
@@ -527,13 +485,10 @@ def main():
         render_hexagrams()
     elif page == "变卦演示":
         render_change_demo()
-    elif page == "历史 / 理论 / 实践":
-        render_content_pages()
-    elif page == "互动测验":
-        render_quiz()
+    elif page == "AI算卦解卦":
+        render_ai_divination()
     elif page == "学习笔记":
         render_notes()
-
 
 if __name__ == "__main__":
     main()
