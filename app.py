@@ -42,12 +42,33 @@ st.markdown("""
         border-top: 1px solid #e8e8e8;
         margin: 14px 0 18px 0;
     }
-    .card {
-        background: white;
-        border-radius: 20px;
-        padding: 28px 24px;
-        margin-bottom: 18px;
-        box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    .pill-row {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        margin: 18px 0 24px 0;
+    }
+    .pill-active {
+        background: #1a1a1a;
+        color: white;
+        border-radius: 24px;
+        padding: 10px 28px;
+        font-size: 0.95rem;
+        border: none;
+        cursor: default;
+    }
+    .pill-inactive {
+        background: #f0efeb;
+        color: #888;
+        border-radius: 24px;
+        padding: 10px 28px;
+        font-size: 0.95rem;
+        border: none;
+        cursor: pointer;
+    }
+    .pill-inactive:hover {
+        background: #e8e7e2;
+        color: #555;
     }
     .rule-box {
         background: #f9f8f4;
@@ -57,17 +78,6 @@ st.markdown("""
         margin: 8px 0;
         font-size: 0.95rem;
         color: #333;
-    }
-    .history-card {
-        background: #fbfbf8;
-        border: 1px solid #eceae2;
-        border-radius: 14px;
-        padding: 14px 14px;
-        margin-bottom: 10px;
-    }
-    .small-muted {
-        color: #999;
-        font-size: 0.82rem;
     }
     .stButton > button {
         border-radius: 12px;
@@ -81,9 +91,6 @@ st.markdown("""
         background: transparent;
         font-size: 1rem;
         padding: 8px 4px;
-    }
-    [data-testid="stTextArea"] textarea {
-        border-radius: 14px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -170,6 +177,31 @@ HEXAGRAMS = [
     {"no":64,"name":"未济","upper":"离","lower":"坎","summary":"尚未完成，强调继续调整。"},
 ]
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def load_history():
+    if not os.path.exists(HISTORY_FILE):
+        return []
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_history_to_disk(history):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def init_state():
     if "method" not in st.session_state:
         st.session_state.method = "数字起卦"
@@ -180,9 +212,12 @@ def init_state():
     if "coin_details" not in st.session_state:
         st.session_state.coin_details = []
     if "history" not in st.session_state:
-        st.session_state.history = []
+        st.session_state.history = load_history()
     if "view" not in st.session_state:
         st.session_state.view = "起卦"
+    if "ai_result_text" not in st.session_state:
+        st.session_state.ai_result_text = ""
+
 
 def get_secret(key, default=""):
     try:
@@ -190,11 +225,13 @@ def get_secret(key, default=""):
     except Exception:
         return os.environ.get(key, default)
 
+
 def find_hexagram(upper, lower):
     for h in HEXAGRAMS:
         if h["upper"] == upper and h["lower"] == lower:
             return h
     return HEXAGRAMS[0]
+
 
 def lines_to_trigram(l3):
     for n, t in TRIGRAMS.items():
@@ -202,8 +239,10 @@ def lines_to_trigram(l3):
             return n
     return "乾"
 
+
 def hex_lines(upper, lower):
     return TRIGRAMS[lower]["lines"] + TRIGRAMS[upper]["lines"]
+
 
 def get_changed_hex(upper, lower, moving):
     orig = hex_lines(upper, lower)
@@ -213,6 +252,7 @@ def get_changed_hex(upper, lower, moving):
     ln = lines_to_trigram(chg[:3])
     un = lines_to_trigram(chg[3:])
     return orig, chg, find_hexagram(un, ln)
+
 
 def render_hex_svg(lines, moving=None, width=130):
     moving = moving or []
@@ -236,6 +276,7 @@ def render_hex_svg(lines, moving=None, width=130):
     parts.append('</svg>')
     return "".join(parts)
 
+
 def hex_card_html(h, lines, moving=None, label=""):
     moving = moving or []
     svg = render_hex_svg(lines, moving, 120)
@@ -256,6 +297,7 @@ def hex_card_html(h, lines, moving=None, label=""):
       {moving_str}
     </div>
     """
+
 
 def zhuxi(orig, chg, moving):
     c = len(moving)
@@ -291,6 +333,7 @@ def zhuxi(orig, chg, moving):
         return "六爻皆变，以之卦卦辞为主", chg["summary"] if chg else "未知"
     return "—", ""
 
+
 def coin_to_line(three):
     h = sum(three)
     if h == 3:
@@ -301,18 +344,31 @@ def coin_to_line(three):
         return 0, False, "少阴"
     return 0, True, "老阴 ×"
 
+
 def num_to_trigram(n):
     r = n % 8
     return TRIGRAM_MAP[r if r else 8], (r if r else 8)
+
 
 def moving_from_sum(t):
     r = t % 6
     return r if r else 6
 
+
 def save_history(record):
     history = st.session_state.history
     history.insert(0, record)
-    st.session_state.history = history[:50]
+    st.session_state.history = history[:100]
+    save_history_to_disk(st.session_state.history)
+
+
+def delete_history(idx):
+    history = st.session_state.history
+    if 0 <= idx < len(history):
+        history.pop(idx)
+        st.session_state.history = history
+        save_history_to_disk(history)
+
 
 def build_result_record(question, method, orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, note=""):
     return {
@@ -332,6 +388,7 @@ def build_result_record(question, method, orig_hex, chg_hex, orig_l, chg_l, movi
         "orig_l": orig_l,
         "chg_l": chg_l
     }
+
 
 def ai_structured(question, orig, chg, moving, rule_name, rule_text):
     api_key = get_secret("OPENROUTER_API_KEY", "")
@@ -398,17 +455,18 @@ def ai_structured(question, orig, chg, moving, rule_name, rule_text):
             },
             temperature=0.5
         )
-
         content = resp.choices[0].message.content
         data = json.loads(content)
         return data, ""
     except Exception as e:
         return None, str(e)
 
+
 def reset_coin():
     st.session_state.coin_lines = []
     st.session_state.coin_details = []
     st.session_state.div_result = None
+
 
 def show_result_block(res, question_text):
     orig = res["orig_hex"]
@@ -453,15 +511,29 @@ def show_result_block(res, question_text):
 
         if err:
             st.error(err)
-        else:
-            with st.expander("起卦结果概览", expanded=True):
-                st.write(ai_data["result_overview"])
-            with st.expander("朱熹法取用说明", expanded=True):
-                st.write(ai_data["zhuxi_method"])
-            with st.expander("对问题的解读", expanded=True):
-                st.write(ai_data["interpretation"])
-            with st.expander("可参考的行动方向", expanded=True):
-                st.write(ai_data["action_advice"])
+            return
+
+        st.session_state.ai_result_text = (
+            f"【起卦结果概览】\n{ai_data['result_overview']}\n\n"
+            f"【朱熹法取用说明】\n{ai_data['zhuxi_method']}\n\n"
+            f"【对问题的解读】\n{ai_data['interpretation']}\n\n"
+            f"【可参考的行动方向】\n{ai_data['action_advice']}"
+        )
+
+    if st.session_state.ai_result_text:
+        with st.expander("起卦结果概览", expanded=True):
+            st.write(ai_data["result_overview"])
+        with st.expander("朱熹法取用说明", expanded=True):
+            st.write(ai_data["zhuxi_method"])
+        with st.expander("对问题的解读", expanded=True):
+            st.write(ai_data["interpretation"])
+        with st.expander("可参考的行动方向", expanded=True):
+            st.write(ai_data["action_advice"])
+
+        col_copy, _ = st.columns([1, 3])
+        if col_copy.button("📋 复制全文", use_container_width=True):
+            st.code(st.session_state.ai_result_text, language="text")
+
 
 def render_cast_page():
     st.markdown('<div class="main-title">易经 · 朱熹解卦</div>', unsafe_allow_html=True)
@@ -475,26 +547,33 @@ def render_cast_page():
         key="question_input"
     )
 
-    col_nav1, col_nav2, col_nav3 = st.columns([1.15, 1, 1.15])
-    with col_nav2:
+    col_m1, col_m2, col_m3 = st.columns([1.3, 1, 1.3])
+    with col_m2:
+        is_num = st.session_state.method == "数字起卦"
+        num_class = "pill-active" if is_num else "pill-inactive"
+        coin_class = "pill-active" if not is_num else "pill-inactive"
+
+        st.markdown(
+            f"""
+            <div class="pill-row">
+                <span class="{num_class}">数字起卦</span>
+                <span class="{coin_class}">金钱起卦</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
         c1, c2 = st.columns(2)
-        if c1.button(
-            "数字起卦",
-            type="primary" if st.session_state.method == "数字起卦" else "secondary",
-            use_container_width=True
-        ):
+        if c1.button("数字起卦", key="switch_num", use_container_width=True):
             st.session_state.method = "数字起卦"
             st.session_state.div_result = None
+            st.session_state.ai_result_text = ""
             st.rerun()
-
-        if c2.button(
-            "金钱起卦",
-            type="primary" if st.session_state.method == "金钱起卦" else "secondary",
-            use_container_width=True
-        ):
+        if c2.button("金钱起卦", key="switch_coin", use_container_width=True):
             st.session_state.method = "金钱起卦"
             st.session_state.div_result = None
             reset_coin()
+            st.session_state.ai_result_text = ""
             st.rerun()
 
     st.markdown("")
@@ -524,6 +603,7 @@ def render_cast_page():
             note = f"上卦：{un}（{int(upper_n)}÷8余{ur}）　下卦：{ln}（{int(lower_n)}÷8余{lr}）　动爻：第{mv}爻（{int(move_n)}÷6余{mv}）"
             res = build_result_record(question, "数字起卦", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, note)
             st.session_state.div_result = res
+            st.session_state.ai_result_text = ""
             save_history(res)
 
     else:
@@ -535,13 +615,15 @@ def render_cast_page():
 
             if done < 6:
                 st.markdown(
-                    f'<div style="text-align:center;padding:28px 0 8px 0;">'
-                    f'<div style="width:68px;height:68px;border-radius:50%;background:#e8e8e8;'
-                    f'margin:0 auto 14px auto;display:flex;align-items:center;justify-content:center;'
-                    f'font-size:1.8rem;">🪙</div>'
-                    f'<div style="color:#aaa;font-size:0.95rem;">诚心默念，模拟六次掷币</div>'
-                    f'<div style="color:#888;font-size:0.85rem;margin-top:4px;">当前：第 {done+1} 爻（{line_names[done]}）</div>'
-                    f'</div>',
+                    f"""
+                    <div style="text-align:center;padding:28px 0 8px 0;">
+                        <div style="width:68px;height:68px;border-radius:50%;background:#e8e8e8;
+                                   margin:0 auto 14px auto;display:flex;align-items:center;justify-content:center;
+                                   font-size:1.8rem;">🪙</div>
+                        <div style="color:#aaa;font-size:0.95rem;">诚心默念，模拟六次掷币</div>
+                        <div style="color:#888;font-size:0.85rem;margin-top:4px;">当前：第 {done+1} 爻（{line_names[done]}）</div>
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
                 st.progress(int(done / 6 * 100), text=f"已投 {done} / 6 爻")
@@ -582,6 +664,7 @@ def render_cast_page():
                     rule_name, rule_text = zhuxi(orig_hex, chg_hex, moving)
                     res = build_result_record(question, "金钱起卦-模拟掷币", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, "")
                     st.session_state.div_result = res
+                    st.session_state.ai_result_text = ""
                     save_history(res)
 
                 if st.button("重新起卦", key="reset_coin_done", use_container_width=True):
@@ -629,14 +712,16 @@ def render_cast_page():
 
                 res = build_result_record(question, "金钱起卦-手动录入", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, note)
                 st.session_state.div_result = res
+                st.session_state.ai_result_text = ""
                 save_history(res)
 
     if st.session_state.div_result:
         show_result_block(st.session_state.div_result, question)
 
+
 def render_history_page():
     st.markdown('<div class="main-title">占卦历史</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">当前为本次会话内保存的历史记录</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">保存在 data/history.json 中</div>', unsafe_allow_html=True)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
     history = st.session_state.history
@@ -646,13 +731,16 @@ def render_history_page():
         return
 
     top1, top2 = st.columns([1, 1])
-    if top1.button("清空历史", use_container_width=True):
+    if top1.button("清空全部", use_container_width=True):
         st.session_state.history = []
+        save_history_to_disk([])
         st.rerun()
 
     if top2.button("返回起卦", use_container_width=True):
         st.session_state.view = "起卦"
         st.rerun()
+
+    st.markdown(f"共 {len(history)} 条记录")
 
     for idx, item in enumerate(history):
         title = f"{item['time']}｜{item['method']}｜第{item['orig_hex_no']}卦 {item['orig_hex_name']}"
@@ -660,6 +748,11 @@ def render_history_page():
             title += f" → 第{item['chg_hex_no']}卦 {item['chg_hex_name']}"
 
         with st.expander(title, expanded=(idx == 0)):
+            col_del, _ = st.columns([1, 5])
+            if col_del.button("删除此条", key=f"del_{idx}", use_container_width=True):
+                delete_history(idx)
+                st.rerun()
+
             st.markdown(f"**问题：** {item['question'] or '未填写'}")
             st.markdown(f"**动爻：** {'、'.join([f'第{m}爻' for m in item['moving']]) if item['moving'] else '无'}")
             st.markdown(f"**朱熹法：** {item['rule_name']}")
@@ -674,6 +767,7 @@ def render_history_page():
                 if item["chg_hex"]:
                     st.markdown(hex_card_html(item["chg_hex"], item["chg_l"], [], "之　卦"), unsafe_allow_html=True)
 
+
 def render_sidebar():
     st.sidebar.title("易经八卦")
     if st.sidebar.button("起卦", use_container_width=True):
@@ -686,6 +780,8 @@ def render_sidebar():
     st.sidebar.markdown("---")
     st.sidebar.caption("当前解卦规则以朱熹法取用为主")
     st.sidebar.caption("AI 输出为结构化四段说明")
+    st.sidebar.caption("历史记录保存至 data/history.json")
+
 
 def main():
     init_state()
@@ -695,6 +791,7 @@ def main():
         render_cast_page()
     else:
         render_history_page()
+
 
 if __name__ == "__main__":
     main()
