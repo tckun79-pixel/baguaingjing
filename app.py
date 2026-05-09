@@ -2,8 +2,14 @@ import streamlit as st
 import json
 import os
 import random
+import time
 from datetime import datetime
 from openai import OpenAI
+
+try:
+    from supabase import create_client
+except Exception:
+    create_client = None
 
 st.set_page_config(
     page_title="易经八卦",
@@ -21,6 +27,17 @@ BAGUA_IMAGE = os.path.join(ASSETS_DIR, "bagua.jpeg")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
+TRIGRAM_NUMBER_MAP = {
+    1: "乾",
+    2: "兑",
+    3: "离",
+    4: "震",
+    5: "巽",
+    6: "坎",
+    7: "艮",
+    8: "坤"
+}
+
 TRIGRAMS = {
     "乾": {"symbol": "☰", "lines": [1, 1, 1], "nature": "天", "meaning": "刚健、创造、主动", "desc": "乾卦象征天，常用来表示创造力、进取心与领导性。"},
     "兑": {"symbol": "☱", "lines": [1, 1, 0], "nature": "泽", "meaning": "喜悦、交流、和悦", "desc": "兑卦象征泽，强调表达、沟通、愉悦与互动。"},
@@ -32,9 +49,14 @@ TRIGRAMS = {
     "坤": {"symbol": "☷", "lines": [0, 0, 0], "nature": "地", "meaning": "柔顺、承载、包容", "desc": "坤卦象征地，强调承载、配合、滋养与稳定。"}
 }
 
+# line_texts 仅作显示占位，不是完整《周易本义》原文
 HEXAGRAMS = [
-    {"no": 1, "name": "乾", "upper": "乾", "lower": "乾", "summary": "元亨利贞，象征创造与刚健。"},
-    {"no": 2, "name": "坤", "upper": "坤", "lower": "坤", "summary": "厚德载物，象征承载与包容。"},
+    {"no": 1, "name": "乾", "upper": "乾", "lower": "乾", "summary": "元亨利贞，象征创造与刚健。",
+     "line_texts": ["初九：潜龙勿用。", "九二：见龙在田，利见大人。", "九三：君子终日乾乾。", "九四：或跃在渊。", "九五：飞龙在天。", "上九：亢龙有悔。"],
+     "use_text": "用九：见群龙无首，吉。"},
+    {"no": 2, "name": "坤", "upper": "坤", "lower": "坤", "summary": "厚德载物，象征承载与包容。",
+     "line_texts": ["初六：履霜，坚冰至。", "六二：直方大。", "六三：含章可贞。", "六四：括囊。", "六五：黄裳元吉。", "上六：龙战于野。"],
+     "use_text": "用六：利永贞。"},
     {"no": 3, "name": "屯", "upper": "坎", "lower": "震", "summary": "万事开头难，重在建立秩序。"},
     {"no": 4, "name": "蒙", "upper": "艮", "lower": "坎", "summary": "启蒙求知，强调教育与学习。"},
     {"no": 5, "name": "需", "upper": "坎", "lower": "乾", "summary": "等待时机，强调准备与耐心。"},
@@ -99,7 +121,25 @@ HEXAGRAMS = [
     {"no": 64, "name": "未济", "upper": "离", "lower": "坎", "summary": "尚未完成，强调继续调整。"}
 ]
 
-def load_notes():
+def get_secret(key, default=""):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return os.environ.get(key, default)
+
+def get_supabase():
+    if create_client is None:
+        return None
+    url = get_secret("SUPABASE_URL", "")
+    key = get_secret("SUPABASE_KEY", "")
+    if not url or not key:
+        return None
+    try:
+        return create_client(url, key)
+    except Exception:
+        return None
+
+def load_local_notes():
     if not os.path.exists(NOTES_FILE):
         return []
     try:
@@ -108,9 +148,50 @@ def load_notes():
     except Exception:
         return []
 
-def save_notes(notes):
+def save_local_notes(notes):
     with open(NOTES_FILE, "w", encoding="utf-8") as f:
         json.dump(notes, f, ensure_ascii=False, indent=2)
+
+def load_notes():
+    supabase = get_supabase()
+    if supabase:
+        try:
+            res = supabase.table("notes").select("*").order("created_at", desc=True).execute()
+            data = res.data or []
+            normalized = []
+            for row in data:
+                normalized.append({
+                    "id": row.get("id"),
+                    "title": row.get("title", ""),
+                    "related": row.get("related", ""),
+                    "content": row.get("content", ""),
+                    "time": row.get("created_at", "")
+                })
+            return normalized
+        except Exception:
+            pass
+    return load_local_notes()
+
+def save_note(title, related, content):
+    supabase = get_supabase()
+    if supabase:
+        payload = {
+            "title": title.strip(),
+            "related": related.strip(),
+            "content": content.strip()
+        }
+        supabase.table("notes").insert(payload).execute()
+        return
+
+    notes = load_local_notes()
+    record = {
+        "title": title.strip(),
+        "related": related.strip(),
+        "content": content.strip(),
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    notes.insert(0, record)
+    save_local_notes(notes)
 
 def trigram_lines_to_text(lines):
     result = []
@@ -121,10 +202,15 @@ def trigram_lines_to_text(lines):
 def hexagram_lines(upper, lower):
     return TRIGRAMS[lower]["lines"] + TRIGRAMS[upper]["lines"]
 
-def lines_to_display(lines):
+def lines_to_display(lines, moving_lines=None):
+    moving_lines = moving_lines or []
     arr = []
-    for v in lines[::-1]:
-        arr.append("──────" if v == 1 else "──  ──")
+    for idx, v in enumerate(lines[::-1], start=1):
+        actual_index = 7 - idx
+        base = "──────" if v == 1 else "──  ──"
+        if actual_index in moving_lines:
+            base += "  ○动" if v == 1 else "  ×动"
+        arr.append(base)
     return "\n".join(arr)
 
 def find_hexagram(upper, lower):
@@ -133,10 +219,11 @@ def find_hexagram(upper, lower):
             return h
     return None
 
-def transform_hexagram(lines, moving_line):
+def transform_hexagram(lines, moving_lines):
     changed = lines[:]
-    idx = moving_line - 1
-    changed[idx] = 0 if changed[idx] == 1 else 1
+    for moving_line in moving_lines:
+        idx = moving_line - 1
+        changed[idx] = 0 if changed[idx] == 1 else 1
     return changed
 
 def lines_to_trigram_name(lines3):
@@ -145,15 +232,109 @@ def lines_to_trigram_name(lines3):
             return name
     return None
 
-def changed_hexagram_from_move(upper, lower, moving_line):
+def changed_hexagram_from_moves(upper, lower, moving_lines):
     original = hexagram_lines(upper, lower)
-    changed = transform_hexagram(original, moving_line)
+    changed = transform_hexagram(original, moving_lines)
     lower_changed = changed[:3]
     upper_changed = changed[3:]
     lower_name = lines_to_trigram_name(lower_changed)
     upper_name = lines_to_trigram_name(upper_changed)
     result_hex = find_hexagram(upper_name, lower_name)
     return original, changed, upper_name, lower_name, result_hex
+
+def number_to_trigram(n):
+    remainder = n % 8
+    if remainder == 0:
+        remainder = 8
+    return TRIGRAM_NUMBER_MAP[remainder], remainder
+
+def moving_line_from_sum(total):
+    remainder = total % 6
+    if remainder == 0:
+        remainder = 6
+    return remainder
+
+def get_hexagram_line_text(hexagram, line_no):
+    texts = hexagram.get("line_texts", [])
+    if 1 <= line_no <= len(texts):
+        return texts[line_no - 1]
+    return f"第 {line_no} 爻：当前版本未内置该爻全文，请以《周易本义》原书对读。"
+
+def zhuxi_rule_explanation(original_hex, changed_hex, moving_lines):
+    count = len(moving_lines)
+    lines_sorted = sorted(moving_lines)
+
+    if count == 0:
+        return {
+            "rule": "六爻不变",
+            "main_text": f"以本卦卦辞为主：第 {original_hex['no']} 卦《{original_hex['name']}》。",
+            "detail": f"本卦要点：{original_hex['summary']}"
+        }
+
+    if count == 1:
+        line_no = lines_sorted[0]
+        return {
+            "rule": "一爻变",
+            "main_text": f"以本卦变爻爻辞为主：第 {line_no} 爻。",
+            "detail": get_hexagram_line_text(original_hex, line_no)
+        }
+
+    if count == 2:
+        upper_line = max(lines_sorted)
+        return {
+            "rule": "两爻变",
+            "main_text": f"以本卦两变爻爻辞参看，通常以上面的变爻为主：第 {upper_line} 爻。",
+            "detail": get_hexagram_line_text(original_hex, upper_line)
+        }
+
+    if count == 3:
+        return {
+            "rule": "三爻变",
+            "main_text": f"兼看本卦与之卦卦辞，以本卦为主；本卦《{original_hex['name']}》，之卦《{changed_hex['name']}》。",
+            "detail": f"本卦：{original_hex['summary']}　之卦：{changed_hex['summary']}"
+        }
+
+    if count == 4:
+        unchanged = [i for i in range(1, 7) if i not in lines_sorted]
+        lower_unchanged = min(unchanged)
+        return {
+            "rule": "四爻变",
+            "main_text": f"以之卦两个不变爻参看，通常以下面的不变爻为主：第 {lower_unchanged} 爻。",
+            "detail": get_hexagram_line_text(changed_hex, lower_unchanged)
+        }
+
+    if count == 5:
+        unchanged = [i for i in range(1, 7) if i not in lines_sorted][0]
+        return {
+            "rule": "五爻变",
+            "main_text": f"以之卦唯一不变爻为主：第 {unchanged} 爻。",
+            "detail": get_hexagram_line_text(changed_hex, unchanged)
+        }
+
+    if count == 6:
+        if original_hex["name"] == "乾":
+            return {
+                "rule": "六爻皆变",
+                "main_text": "乾卦六爻皆变，以用九为主。",
+                "detail": original_hex.get("use_text", "用九：当前版本未内置全文。")
+            }
+        if original_hex["name"] == "坤":
+            return {
+                "rule": "六爻皆变",
+                "main_text": "坤卦六爻皆变，以用六为主。",
+                "detail": original_hex.get("use_text", "用六：当前版本未内置全文。")
+            }
+        return {
+            "rule": "六爻皆变",
+            "main_text": f"其余诸卦六爻皆变，以之卦卦辞为主：第 {changed_hex['no']} 卦《{changed_hex['name']}》。",
+            "detail": changed_hex["summary"]
+        }
+
+    return {
+        "rule": "未识别",
+        "main_text": "未识别当前变爻情况。",
+        "detail": ""
+    }
 
 def add_history_record(title):
     if "history" not in st.session_state:
@@ -163,81 +344,136 @@ def add_history_record(title):
     st.session_state.history = st.session_state.history[:20]
 
 def get_openrouter_client():
-    api_key = st.secrets.get("OPENROUTER_API_KEY", "") if hasattr(st, "secrets") else ""
-    if not api_key:
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    api_key = get_secret("OPENROUTER_API_KEY", "")
     if not api_key:
         return None, "未找到 OPENROUTER_API_KEY。请在 .streamlit/secrets.toml 或环境变量中设置。"
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://openrouter.ai/api/v1"
-    )
+    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
     return client, ""
 
 def get_model_name():
-    if hasattr(st, "secrets") and "MODEL_NAME" in st.secrets:
-        return st.secrets["MODEL_NAME"]
-    return os.environ.get("MODEL_NAME", "google/gemini-2.5-flash-lite")
+    return get_secret("MODEL_NAME", "google/gemini-2.5-flash-lite")
 
-def ai_interpret(question, upper, lower, moving_line, original_hex, changed_hex):
+def ai_interpret(question, original_hex, changed_hex, moving_lines, rule_result, method_name):
     client, err = get_openrouter_client()
     if err:
         return None, err
 
     model_name = get_model_name()
     changed_name = changed_hex["name"] if changed_hex else "未知"
-    changed_summary = changed_hex["summary"] if changed_hex else "暂无"
 
     prompt = f"""
 你是一名中文易经学习助手。
-任务：对用户给出的卦象做学习型解释，可以直接给出对问题的理解与建议，但不要写成迷信营销文案。
-
-用户问题：
-{question}
+本次起卦方式：{method_name}
+用户问题：{question}
 
 本卦：
-- 名称：{original_hex['name']}
+- 卦名：{original_hex['name']}
 - 卦序：{original_hex['no']}
-- 上卦：{upper}
-- 下卦：{lower}
-- 动爻：第 {moving_line} 爻
+- 上卦：{original_hex['upper']}
+- 下卦：{original_hex['lower']}
 - 简释：{original_hex['summary']}
 
 之卦：
-- 名称：{changed_name}
-- 简释：{changed_summary}
+- 卦名：{changed_name}
+- 简释：{changed_hex['summary'] if changed_hex else '暂无'}
 
-请用简体中文输出，结构如下：
-1. 卦象概览
-2. 对当前问题的解读
-3. 可参考的行动方向
-4. 简短提醒
+动爻：
+{moving_lines if moving_lines else '无'}
+
+朱熹法取用：
+- 规则：{rule_result['rule']}
+- 主看：{rule_result['main_text']}
+- 说明：{rule_result['detail']}
+
+请按以下结构输出简体中文：
+1. 起卦结果概览
+2. 依朱熹法应如何取用
+3. 对这个问题的解读
+4. 可参考的行动方向
 
 要求：
-- 语言自然清楚
-- 不要故弄玄虚
-- 不要输出“百分之百确定”
-- 可以给出方向性建议
+- 语气自然
+- 重点放在理解、判断、取舍、时机、节奏
+- 不要使用夸张迷信措辞
 """
 
     try:
         response = client.chat.completions.create(
             model=model_name,
             messages=[
-                {"role": "system", "content": "你是一个清晰、克制、自然的中文助手。"},
+                {"role": "system", "content": "你是一个客观、清晰、克制的中文助手。"},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.6
         )
-        text = response.choices[0].message.content
-        return text, ""
+        return response.choices[0].message.content, ""
     except Exception as e:
         return None, f"调用 AI 失败：{e}"
+
+def simulate_number_divination(a, b):
+    upper_name, upper_num = number_to_trigram(a)
+    lower_name, lower_num = number_to_trigram(b)
+    move = moving_line_from_sum(a + b)
+    return {
+        "method": "数字卦",
+        "a": a,
+        "b": b,
+        "upper_name": upper_name,
+        "lower_name": lower_name,
+        "upper_num": upper_num,
+        "lower_num": lower_num,
+        "moving_lines": [move]
+    }
+
+def coin_to_line(three):
+    heads = sum(three)
+    # 这里约定：正面=1，反面=0
+    # 三正=老阳(动)；两正一反=少阳；一正两反=少阴；三反=老阴(动)
+    if heads == 3:
+        return 1, True, "老阳"
+    if heads == 2:
+        return 1, False, "少阳"
+    if heads == 1:
+        return 0, False, "少阴"
+    return 0, True, "老阴"
+
+def simulate_coin_divination(rounds):
+    lines = []
+    moving_lines = []
+    detail = []
+
+    for i, toss in enumerate(rounds, start=1):
+        val, moving, label = coin_to_line(toss)
+        lines.append(val)
+        if moving:
+            moving_lines.append(i)
+        faces = ["正" if x == 1 else "反" for x in toss]
+        detail.append({
+            "line": i,
+            "faces": faces,
+            "label": label,
+            "value": val,
+            "moving": moving
+        })
+
+    lower_lines = lines[:3]
+    upper_lines = lines[3:]
+    lower_name = lines_to_trigram_name(lower_lines)
+    upper_name = lines_to_trigram_name(upper_lines)
+
+    return {
+        "method": "铜钱卦",
+        "lines": lines,
+        "detail": detail,
+        "upper_name": upper_name,
+        "lower_name": lower_name,
+        "moving_lines": moving_lines
+    }
 
 def render_home():
     add_history_record("浏览：首页")
     st.title("☯ 易经八卦")
-    st.subheader("阴阳、五行、八卦、六十四卦互动学习")
+    st.subheader("数字卦、铜钱卦、卦象推演与学习解读")
 
     if os.path.exists(WUXING_IMAGE):
         st.image(WUXING_IMAGE, caption="阴阳五行图", width="stretch")
@@ -247,10 +483,11 @@ def render_home():
         st.markdown("""
 ### 项目简介
 本应用聚焦于：
-- 易经基础概念
+- 数字卦与铜钱卦
 - 八卦与六十四卦结构
-- 变卦演示
-- AI辅助解卦
+- 变卦推演
+- 朱熹法取用说明
+- AI辅助解读
 - 学习笔记整理
         """)
     with col2:
@@ -269,7 +506,7 @@ def render_theory_image():
 阴阳与五行是传统文化中常见的关系框架，可用于理解变化、平衡、制约与生成。
 
 ### 八卦结构
-八卦由三个爻组成，象征不同自然属性与关系逻辑；两个八卦上下组合，形成六十四卦。
+八卦由三个爻组成，两个八卦上下组合，形成六十四卦。
     """)
 
     if os.path.exists(WUXING_IMAGE):
@@ -282,25 +519,18 @@ def render_theory_image():
     else:
         st.warning("尚未找到图片文件：assets/bagua.jpeg")
 
-    st.markdown("""
-### 学习提示
-- 相生可理解为促进、支持、延展
-- 相克可理解为制衡、限制、调节
-- 八卦可理解为结构化观察世界的一种传统表达方式
-    """)
-
 def render_basics():
-    add_history_record("浏览：易经基础")
-    st.title("易经基础")
+    add_history_record("浏览：基础说明")
+    st.title("基础说明")
     st.markdown("""
-### 阴阳
-阴阳可以理解为事物中相对、互补、流动变化的两个方面。
+### 数字卦
+当前版本采用常见数字起卦法：两数分别除八取上卦、下卦，两数之和除六取动爻。
 
-### 八卦
-八卦由三个阴阳爻组合而成，共有八种基本形式。
+### 铜钱卦
+当前版本采用三枚铜钱连掷六次的方法：三正为老阳、两正一反为少阳、一正两反为少阴、三反为老阴。老阳与老阴视为动爻。
 
-### 六十四卦
-两个三爻卦上下相叠，构成六爻卦，即六十四卦的结构基础。
+### 朱熹法
+当前版本的“取用规则”按常见朱熹法整理：依据动爻数量决定主看本卦、爻辞或之卦。
     """)
 
 def render_trigrams():
@@ -346,83 +576,203 @@ def render_hexagrams():
             st.write(f"**下卦：** {result['lower']}（{TRIGRAMS[result['lower']]['nature']}）")
             st.write(f"**简释：** {result['summary']}")
 
-def render_change_demo():
-    add_history_record("浏览：变卦演示")
-    st.title("变卦演示")
+def show_divination_result(method_name, original_hex, changed_hex, original_lines, changed_lines, moving_lines, rule_result, extra_info=None):
+    st.markdown("### 起卦结果")
 
-    upper = st.selectbox("选择上卦", list(TRIGRAMS.keys()), key="change_upper")
-    lower = st.selectbox("选择下卦", list(TRIGRAMS.keys()), key="change_lower")
-    moving_line = st.slider("选择动爻（1 为初爻，6 为上爻）", 1, 6, 1)
+    if extra_info:
+        st.info(extra_info)
 
-    original_hex = find_hexagram(upper, lower)
-    original_lines, changed_lines, upper_name, lower_name, changed_hex = changed_hexagram_from_move(upper, lower, moving_line)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 本卦")
-        if original_hex:
-            st.write(f"**第 {original_hex['no']} 卦：{original_hex['name']}**")
-        st.code(lines_to_display(original_lines))
-    with col2:
-        st.markdown("### 之卦")
-        if changed_hex:
-            st.write(f"**第 {changed_hex['no']} 卦：{changed_hex['name']}**")
-            st.write(f"上卦：{upper_name}　下卦：{lower_name}")
-            st.write(changed_hex["summary"])
-        else:
-            st.write("暂未找到对应之卦。")
-        st.code(lines_to_display(changed_lines))
-
-def render_ai_divination():
-    add_history_record("浏览：AI算卦解卦")
-    st.title("AI算卦解卦")
-
-    mode = st.radio("起卦方式", ["手动起卦", "随机起卦"], horizontal=True)
-
-    if mode == "手动起卦":
-        upper = st.selectbox("选择上卦", list(TRIGRAMS.keys()), key="ai_upper")
-        lower = st.selectbox("选择下卦", list(TRIGRAMS.keys()), key="ai_lower")
-        moving_line = st.slider("选择动爻", 1, 6, 1, key="ai_line")
-    else:
-        upper = random.choice(list(TRIGRAMS.keys()))
-        lower = random.choice(list(TRIGRAMS.keys()))
-        moving_line = random.randint(1, 6)
-        st.info(f"随机结果：上卦 {upper}｜下卦 {lower}｜动爻 第 {moving_line} 爻")
-
-    question = st.text_area("请输入你想问的问题", placeholder="例如：我最近的工作发展方向应该怎样调整？")
-
-    original_hex = find_hexagram(upper, lower)
-    original_lines, changed_lines, upper_name, lower_name, changed_hex = changed_hexagram_from_move(upper, lower, moving_line)
-
-    st.markdown("### 卦象结果")
     c1, c2 = st.columns(2)
     with c1:
         st.write(f"**本卦：** 第 {original_hex['no']} 卦 {original_hex['name']}")
+        st.write(f"上卦：{original_hex['upper']}　下卦：{original_hex['lower']}")
         st.write(original_hex["summary"])
-        st.code(lines_to_display(original_lines))
+        st.code(lines_to_display(original_lines, moving_lines))
     with c2:
-        if changed_hex:
-            st.write(f"**之卦：** 第 {changed_hex['no']} 卦 {changed_hex['name']}")
-            st.write(changed_hex["summary"])
-        else:
-            st.write("**之卦：** 暂未找到")
+        st.write(f"**之卦：** 第 {changed_hex['no']} 卦 {changed_hex['name']}")
+        st.write(f"上卦：{changed_hex['upper']}　下卦：{changed_hex['lower']}")
+        st.write(changed_hex["summary"])
         st.code(lines_to_display(changed_lines))
 
-    if st.button("生成 AI 解读", type="primary"):
-        if not question.strip():
-            st.warning("请先输入一个问题。")
-        else:
+    st.markdown("### 朱熹法取用")
+    st.write(f"**规则：** {rule_result['rule']}")
+    st.write(f"**主看：** {rule_result['main_text']}")
+    st.write(f"**说明：** {rule_result['detail']}")
+
+def render_number_divination():
+    add_history_record("浏览：数字卦")
+    st.title("数字卦")
+
+    question = st.text_area("请输入你想问的问题", placeholder="例如：这件事情适合现在推进吗？")
+    a = st.number_input("输入第一个数字（取上卦）", min_value=1, value=8, step=1)
+    b = st.number_input("输入第二个数字（取下卦）", min_value=1, value=8, step=1)
+
+    if st.button("生成数字卦", type="primary"):
+        result = simulate_number_divination(int(a), int(b))
+        upper = result["upper_name"]
+        lower = result["lower_name"]
+        moving_lines = result["moving_lines"]
+
+        original_hex = find_hexagram(upper, lower)
+        original_lines, changed_lines, upper_name2, lower_name2, changed_hex = changed_hexagram_from_moves(upper, lower, moving_lines)
+        rule_result = zhuxi_rule_explanation(original_hex, changed_hex, moving_lines)
+
+        extra = f"取数结果：上卦 {upper}（余 {result['upper_num']}），下卦 {lower}（余 {result['lower_num']}），动爻 第 {moving_lines[0]} 爻。"
+        show_divination_result("数字卦", original_hex, changed_hex, original_lines, changed_lines, moving_lines, rule_result, extra)
+
+        if question.strip():
             with st.spinner("AI 正在生成解读..."):
-                result, err = ai_interpret(question, upper, lower, moving_line, original_hex, changed_hex)
+                ai_text, err = ai_interpret(question, original_hex, changed_hex, moving_lines, rule_result, "数字卦")
             if err:
                 st.error(err)
             else:
                 st.markdown("### AI 解读")
-                st.write(result)
+                st.write(ai_text)
+
+def render_coin_divination():
+    add_history_record("浏览：铜钱卦")
+    st.title("铜钱卦")
+
+    question = st.text_area("请输入你想问的问题", key="coin_question", placeholder="例如：当前这次选择是否合适？")
+    mode = st.radio("铜钱输入方式", ["随机掷卦", "手动输入六次结果"], horizontal=True)
+
+    rounds = []
+
+    if mode == "随机掷卦":
+        if st.button("随机生成铜钱卦", type="primary"):
+            for _ in range(6):
+                toss = [random.randint(0, 1) for _ in range(3)]
+                rounds.append(toss)
+            st.session_state["coin_rounds"] = rounds
+    else:
+        st.write("每一爻输入三个面，正=1，反=0；从初爻到上爻。")
+        manual_rounds = []
+        for i in range(1, 7):
+            cols = st.columns(3)
+            vals = []
+            for j in range(3):
+                val = cols[j].selectbox(f"第{i}爻 第{j+1}枚", [1, 0], key=f"coin_{i}_{j}", format_func=lambda x: "正" if x == 1 else "反")
+                vals.append(val)
+            manual_rounds.append(vals)
+        if st.button("生成手动铜钱卦", type="primary"):
+            st.session_state["coin_rounds"] = manual_rounds
+
+    rounds = st.session_state.get("coin_rounds", [])
+
+    if rounds:
+        result = simulate_coin_divination(rounds)
+        upper = result["upper_name"]
+        lower = result["lower_name"]
+        moving_lines = result["moving_lines"]
+
+        original_hex = find_hexagram(upper, lower)
+        original_lines, changed_lines, upper_name2, lower_name2, changed_hex = changed_hexagram_from_moves(upper, lower, moving_lines)
+        rule_result = zhuxi_rule_explanation(original_hex, changed_hex, moving_lines)
+
+        detail_text = []
+        for d in result["detail"]:
+            detail_text.append(f"第{d['line']}爻：{' '.join(d['faces'])} → {d['label']}")
+        extra = "；".join(detail_text)
+
+        show_divination_result("铜钱卦", original_hex, changed_hex, original_lines, changed_lines, moving_lines, rule_result, extra)
+
+        if question.strip():
+            with st.spinner("AI 正在生成解读..."):
+                ai_text, err = ai_interpret(question, original_hex, changed_hex, moving_lines, rule_result, "铜钱卦")
+            if err:
+                st.error(err)
+            else:
+                st.markdown("### AI 解读")
+                st.write(ai_text)
+
+def render_animation_page():
+    add_history_record("浏览：动画起卦")
+    st.title("动画页面")
+
+    anim_type = st.radio("动画类型", ["数字卦动画", "铜钱卦动画"], horizontal=True)
+
+    placeholder = st.empty()
+    progress = st.progress(0, text="准备开始")
+
+    if anim_type == "数字卦动画":
+        a = st.number_input("数字A", min_value=1, value=12, step=1, key="anim_a")
+        b = st.number_input("数字B", min_value=1, value=27, step=1, key="anim_b")
+
+        if st.button("播放数字卦动画"):
+            steps = [
+                "读取第一个数字",
+                "读取第二个数字",
+                "第一个数字除八取上卦",
+                "第二个数字除八取下卦",
+                "两数相加除六取动爻",
+                "生成本卦与之卦"
+            ]
+            for i, step in enumerate(steps, start=1):
+                progress.progress(int(i / len(steps) * 100), text=step)
+                with placeholder.container():
+                    st.markdown(f"### {step}")
+                    if i >= 1:
+                        st.write(f"数字A：{a}")
+                    if i >= 2:
+                        st.write(f"数字B：{b}")
+                    if i >= 3:
+                        upper_name, upper_num = number_to_trigram(int(a))
+                        st.write(f"上卦：{upper_name}（余数 {upper_num}）")
+                    if i >= 4:
+                        lower_name, lower_num = number_to_trigram(int(b))
+                        st.write(f"下卦：{lower_name}（余数 {lower_num}）")
+                    if i >= 5:
+                        mv = moving_line_from_sum(int(a) + int(b))
+                        st.write(f"动爻：第 {mv} 爻")
+                    if i >= 6:
+                        original_hex = find_hexagram(upper_name, lower_name)
+                        original_lines, changed_lines, _, _, changed_hex = changed_hexagram_from_moves(upper_name, lower_name, [mv])
+                        st.write(f"本卦：第 {original_hex['no']} 卦 {original_hex['name']}")
+                        st.code(lines_to_display(original_lines, [mv]))
+                        st.write(f"之卦：第 {changed_hex['no']} 卦 {changed_hex['name']}")
+                        st.code(lines_to_display(changed_lines))
+                time.sleep(0.4)
+            progress.progress(100, text="完成")
+
+    else:
+        if st.button("播放铜钱卦动画"):
+            rounds = []
+            for _ in range(6):
+                rounds.append([random.randint(0, 1) for _ in range(3)])
+
+            for i, toss in enumerate(rounds, start=1):
+                progress.progress(int(i / 6 * 100), text=f"第 {i} 次掷钱")
+                val, moving, label = coin_to_line(toss)
+                with placeholder.container():
+                    st.markdown(f"### 第 {i} 次掷钱")
+                    st.write("结果：", " ".join(["正" if x == 1 else "反" for x in toss]))
+                    st.write(f"判定：{label}")
+                    if moving:
+                        st.write("此爻为动爻")
+                time.sleep(0.45)
+
+            result = simulate_coin_divination(rounds)
+            upper = result["upper_name"]
+            lower = result["lower_name"]
+            moving_lines = result["moving_lines"]
+            original_hex = find_hexagram(upper, lower)
+            original_lines, changed_lines, _, _, changed_hex = changed_hexagram_from_moves(upper, lower, moving_lines)
+
+            with placeholder.container():
+                st.markdown("### 铜钱卦结果")
+                st.write(f"本卦：第 {original_hex['no']} 卦 {original_hex['name']}")
+                st.code(lines_to_display(original_lines, moving_lines))
+                st.write(f"之卦：第 {changed_hex['no']} 卦 {changed_hex['name']}")
+                st.code(lines_to_display(changed_lines))
+            progress.progress(100, text="完成")
 
 def render_notes():
     add_history_record("浏览：学习笔记")
     st.title("学习笔记")
+
+    supabase_enabled = get_supabase() is not None
+    st.caption("当前存储：Supabase" if supabase_enabled else "当前存储：本地 JSON（data/notes.json）")
+
     notes = load_notes()
 
     with st.form("note_form", clear_on_submit=True):
@@ -433,24 +783,21 @@ def render_notes():
 
     if submitted:
         if title.strip() and content.strip():
-            record = {
-                "title": title.strip(),
-                "related": related.strip(),
-                "content": content.strip(),
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            notes.insert(0, record)
-            save_notes(notes)
-            st.success("笔记已保存。")
+            try:
+                save_note(title, related, content)
+                st.success("笔记已保存。")
+                st.rerun()
+            except Exception as e:
+                st.error(f"保存失败：{e}")
         else:
             st.warning("请至少填写标题和内容。")
 
     st.markdown("### 已保存笔记")
     if notes:
-        for i, note in enumerate(notes[:20], start=1):
-            with st.expander(f"{i}. {note['title']}｜{note['time']}"):
-                st.write(f"**关联主题：** {note['related'] or '无'}")
-                st.write(note["content"])
+        for i, note in enumerate(notes[:50], start=1):
+            with st.expander(f"{i}. {note.get('title', '')}｜{note.get('time', '')}"):
+                st.write(f"**关联主题：** {note.get('related', '') or '无'}")
+                st.write(note.get("content", ""))
     else:
         st.write("目前还没有笔记。")
 
@@ -461,11 +808,12 @@ def main():
         [
             "首页",
             "理论图解",
-            "易经基础",
+            "基础说明",
             "八卦图谱",
             "六十四卦",
-            "变卦演示",
-            "AI算卦解卦",
+            "数字卦",
+            "铜钱卦",
+            "动画页面",
             "学习笔记"
         ]
     )
@@ -477,16 +825,18 @@ def main():
         render_home()
     elif page == "理论图解":
         render_theory_image()
-    elif page == "易经基础":
+    elif page == "基础说明":
         render_basics()
     elif page == "八卦图谱":
         render_trigrams()
     elif page == "六十四卦":
         render_hexagrams()
-    elif page == "变卦演示":
-        render_change_demo()
-    elif page == "AI算卦解卦":
-        render_ai_divination()
+    elif page == "数字卦":
+        render_number_divination()
+    elif page == "铜钱卦":
+        render_coin_divination()
+    elif page == "动画页面":
+        render_animation_page()
     elif page == "学习笔记":
         render_notes()
 
