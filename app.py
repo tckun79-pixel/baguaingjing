@@ -79,6 +79,26 @@ st.markdown("""
         font-size: 0.95rem;
         color: #333;
     }
+    .yaoci-box {
+        background: #faf9f5;
+        border: 1px solid #e8e7e2;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin: 6px 0;
+    }
+    .yaoci-main {
+        border-left: 4px solid #c0392b;
+    }
+    .yaoci-secondary {
+        border-left: 4px solid #d4a017;
+    }
+    .guaci-box {
+        background: #f0f4f0;
+        border-left: 4px solid #2e7d32;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin: 6px 0;
+    }
     .stButton > button {
         border-radius: 12px;
         font-size: 1rem;
@@ -188,16 +208,16 @@ def load_history():
     if not os.path.exists(HISTORY_FILE):
         return []
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(HISTORY_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
     except Exception:
         return []
 
 
 def save_history_to_disk(history):
     try:
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+        with open(HISTORY_FILE, "w", encoding="utf-8") as fh:
+            json.dump(history, fh, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -300,38 +320,49 @@ def hex_card_html(h, lines, moving=None, label=""):
 
 
 def zhuxi(orig, chg, moving):
+    """朱熹法解卦：返回 (rule_name, rule_text, guaci, main_yaoci, secondary_yaoci)"""
     c = len(moving)
     s = sorted(moving)
+    guaci = orig.get("summary", "")
 
-    def orig_line(n):
+    def orig_line_text(n):
         t = orig.get("lines", [])
         return t[n - 1] if 1 <= n <= len(t) else f"第{n}爻：请对读《周易本义》原书。"
 
-    def chg_line(n):
+    def chg_line_text(n):
         t = chg.get("lines", []) if chg else []
         return t[n - 1] if 1 <= n <= len(t) else f"第{n}爻：请对读《周易本义》原书。"
 
     if c == 0:
-        return "六爻不变", f"以本卦卦辞为主：{orig['summary']}"
+        return "六爻不变", f"以本卦卦辞为主：{orig['summary']}", guaci, "", ""
     if c == 1:
-        return "一爻变，以本卦变爻爻辞为主", orig_line(s[0])
+        line = orig_line_text(s[0])
+        return "一爻变，以本卦变爻爻辞为主", line, guaci, line, ""
     if c == 2:
-        return "两爻变，以上位变爻爻辞为主", orig_line(max(s))
+        # 两爻变：以上位变爻为主，下位为辅
+        upper_line = orig_line_text(max(s))
+        lower_line = orig_line_text(min(s))
+        return "两爻变，以上位变爻爻辞为主", upper_line, guaci, upper_line, lower_line
     if c == 3:
-        return "三爻变，兼看本卦与之卦卦辞", f"本卦：{orig['summary']}　之卦：{chg['summary'] if chg else '未知'}"
+        return "三爻变，兼看本卦与之卦卦辞", f"本卦：{orig['summary']}　之卦：{chg['summary'] if chg else '未知'}", guaci, "", ""
     if c == 4:
         unchanged = [i for i in range(1, 7) if i not in s]
-        return "四爻变，以之卦下位不变爻爻辞为主", chg_line(min(unchanged))
+        line = chg_line_text(min(unchanged))
+        return "四爻变，以之卦下位不变爻爻辞为主", line, guaci, line, ""
     if c == 5:
         unchanged = [i for i in range(1, 7) if i not in s]
-        return "五爻变，以之卦唯一不变爻爻辞为主", chg_line(unchanged[0] if unchanged else 1)
+        line = chg_line_text(unchanged[0] if unchanged else 1)
+        return "五爻变，以之卦唯一不变爻爻辞为主", line, guaci, line, ""
     if c == 6:
         if orig["name"] == "乾":
-            return "六爻皆变（乾）", orig.get("use", "用九：见群龙无首，吉。")
+            line = orig.get("use", "用九：见群龙无首，吉。")
+            return "六爻皆变（乾）", line, guaci, line, ""
         if orig["name"] == "坤":
-            return "六爻皆变（坤）", orig.get("use", "用六：利永贞。")
-        return "六爻皆变，以之卦卦辞为主", chg["summary"] if chg else "未知"
-    return "—", ""
+            line = orig.get("use", "用六：利永贞。")
+            return "六爻皆变（坤）", line, guaci, line, ""
+        line = chg["summary"] if chg else "未知"
+        return "六爻皆变，以之卦卦辞为主", line, guaci, line, ""
+    return "—", "", guaci, "", ""
 
 
 def coin_to_line(three):
@@ -370,7 +401,7 @@ def delete_history(idx):
         save_history_to_disk(history)
 
 
-def build_result_record(question, method, orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, note=""):
+def build_result_record(question, method, orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, guaci, main_yaoci, secondary_yaoci, note=""):
     return {
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "question": question.strip(),
@@ -382,6 +413,9 @@ def build_result_record(question, method, orig_hex, chg_hex, orig_l, chg_l, movi
         "moving": moving,
         "rule_name": rule_name,
         "rule_text": rule_text,
+        "guaci": guaci,
+        "main_yaoci": main_yaoci,
+        "secondary_yaoci": secondary_yaoci,
         "note": note,
         "orig_hex": orig_hex,
         "chg_hex": chg_hex,
@@ -390,7 +424,7 @@ def build_result_record(question, method, orig_hex, chg_hex, orig_l, chg_l, movi
     }
 
 
-def ai_structured(question, orig, chg, moving, rule_name, rule_text):
+def ai_structured(question, orig, chg, moving, rule_name, rule_text, guaci, main_yaoci, secondary_yaoci):
     api_key = get_secret("OPENROUTER_API_KEY", "")
     if not api_key:
         return None, "未配置 OPENROUTER_API_KEY"
@@ -398,6 +432,7 @@ def ai_structured(question, orig, chg, moving, rule_name, rule_text):
     model = get_secret("MODEL_NAME", "google/gemini-2.5-flash-lite")
     client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
 
+    sec = f"\n辅助参考爻辞：{secondary_yaoci}" if secondary_yaoci else ""
     prompt = f"""
 你是一名中文易经学习助手。请根据以下信息，生成结构化解读。
 
@@ -406,12 +441,15 @@ def ai_structured(question, orig, chg, moving, rule_name, rule_text):
 之卦：{chg['name'] + '（' + chg['summary'] + '）' if chg else '无'}
 动爻：{moving if moving else '无'}
 朱熹法取用：{rule_name} — {rule_text}
+卦辞：{guaci}
+主断爻辞：{main_yaoci}{sec}
 
 要求：
 - 不神秘化
 - 不做确定性承诺
 - 用语自然、克制、清晰
 - 结合起卦问题，不要泛泛而谈
+- 引用朱熹法说明为何取此爻辞
 """
 
     schema = {
@@ -426,11 +464,11 @@ def ai_structured(question, orig, chg, moving, rule_name, rule_text):
                 },
                 "zhuxi_method": {
                     "type": "string",
-                    "description": "说明依朱熹法为何应这样取用"
+                    "description": "说明依朱熹法为何应这样取用，包括卦辞和爻辞的选择"
                 },
                 "interpretation": {
                     "type": "string",
-                    "description": "对用户问题的核心解读"
+                    "description": "对用户问题的核心解读，引用卦辞和主断爻辞"
                 },
                 "action_advice": {
                     "type": "string",
@@ -474,6 +512,9 @@ def show_result_block(res, question_text):
     moving = res["moving"]
     rule_name = res["rule_name"]
     rule_text = res["rule_text"]
+    guaci = res.get("guaci", "")
+    main_yaoci = res.get("main_yaoci", "")
+    secondary_yaoci = res.get("secondary_yaoci", "")
 
     st.markdown("---")
     if res.get("note"):
@@ -498,6 +539,24 @@ def show_result_block(res, question_text):
         unsafe_allow_html=True
     )
 
+    # Display guaci and yaoci explicitly
+    st.markdown("---")
+    st.markdown("### 卦辞与爻辞")
+
+    with st.expander("📜 本卦卦辞（背景参考）", expanded=True):
+        st.markdown(f'<div class="guaci-box"><b>{orig["name"]}卦 卦辞：</b><br>{guaci}</div>', unsafe_allow_html=True)
+        st.caption("卦辞提供整体背景，所有情况均可参考")
+
+    if main_yaoci:
+        with st.expander("🔴 主断爻辞（朱熹法取用）", expanded=True):
+            st.markdown(f'<div class="yaoci-box yaoci-main"><b>{main_yaoci}</b></div>', unsafe_allow_html=True)
+            st.caption(f"依朱熹「{rule_name}」，此爻辞为主要判断依据")
+
+    if secondary_yaoci:
+        with st.expander("🟡 辅助爻辞（参考）", expanded=False):
+            st.markdown(f'<div class="yaoci-box yaoci-secondary"><b>{secondary_yaoci}</b></div>', unsafe_allow_html=True)
+            st.caption("此爻辞作为辅助参考")
+
     st.markdown("---")
     st.markdown("### AI 解读")
 
@@ -507,7 +566,7 @@ def show_result_block(res, question_text):
 
     if st.button("生成结构化解读", type="primary", use_container_width=True):
         with st.spinner("解读中..."):
-            ai_data, err = ai_structured(question_text, orig, chg, moving, rule_name, rule_text)
+            ai_data, err = ai_structured(question_text, orig, chg, moving, rule_name, rule_text, guaci, main_yaoci, secondary_yaoci)
 
         if err:
             st.error(err)
@@ -598,10 +657,10 @@ def render_cast_page():
 
             orig_hex = find_hexagram(un, ln)
             orig_l, chg_l, chg_hex = get_changed_hex(un, ln, moving)
-            rule_name, rule_text = zhuxi(orig_hex, chg_hex, moving)
+            rule_name, rule_text, guaci, main_yaoci, secondary_yaoci = zhuxi(orig_hex, chg_hex, moving)
 
             note = f"上卦：{un}（{int(upper_n)}÷8余{ur}）　下卦：{ln}（{int(lower_n)}÷8余{lr}）　动爻：第{mv}爻（{int(move_n)}÷6余{mv}）"
-            res = build_result_record(question, "数字起卦", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, note)
+            res = build_result_record(question, "数字起卦", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, guaci, main_yaoci, secondary_yaoci, note)
             st.session_state.div_result = res
             st.session_state.ai_result_text = ""
             save_history(res)
@@ -661,8 +720,8 @@ def render_cast_page():
                     un_name = lines_to_trigram(lines[3:])
                     orig_hex = find_hexagram(un_name, ln_name)
                     orig_l, chg_l, chg_hex = get_changed_hex(un_name, ln_name, moving)
-                    rule_name, rule_text = zhuxi(orig_hex, chg_hex, moving)
-                    res = build_result_record(question, "金钱起卦-模拟掷币", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, "")
+                    rule_name, rule_text, guaci, main_yaoci, secondary_yaoci = zhuxi(orig_hex, chg_hex, moving)
+                    res = build_result_record(question, "金钱起卦-模拟掷币", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, guaci, main_yaoci, secondary_yaoci, "")
                     st.session_state.div_result = res
                     st.session_state.ai_result_text = ""
                     save_history(res)
@@ -702,7 +761,7 @@ def render_cast_page():
                 un_name = lines_to_trigram(lines[3:])
                 orig_hex = find_hexagram(un_name, ln_name)
                 orig_l, chg_l, chg_hex = get_changed_hex(un_name, ln_name, moving)
-                rule_name, rule_text = zhuxi(orig_hex, chg_hex, moving)
+                rule_name, rule_text, guaci, main_yaoci, secondary_yaoci = zhuxi(orig_hex, chg_hex, moving)
 
                 note_parts = []
                 for d in details:
@@ -710,7 +769,7 @@ def render_cast_page():
                     note_parts.append(f"第{d['line']}爻:{faces}->{d['label']}")
                 note = "；".join(note_parts)
 
-                res = build_result_record(question, "金钱起卦-手动录入", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, note)
+                res = build_result_record(question, "金钱起卦-手动录入", orig_hex, chg_hex, orig_l, chg_l, moving, rule_name, rule_text, guaci, main_yaoci, secondary_yaoci, note)
                 st.session_state.div_result = res
                 st.session_state.ai_result_text = ""
                 save_history(res)
@@ -757,6 +816,12 @@ def render_history_page():
             st.markdown(f"**动爻：** {'、'.join([f'第{m}爻' for m in item['moving']]) if item['moving'] else '无'}")
             st.markdown(f"**朱熹法：** {item['rule_name']}")
             st.markdown(f"**取用说明：** {item['rule_text']}")
+            if item.get("guaci"):
+                st.markdown(f"**卦辞：** {item['guaci']}")
+            if item.get("main_yaoci"):
+                st.markdown(f"**主断爻辞：** {item['main_yaoci']}")
+            if item.get("secondary_yaoci"):
+                st.markdown(f"**辅助爻辞：** {item['secondary_yaoci']}")
             if item.get("note"):
                 st.caption(item["note"])
 
@@ -779,7 +844,7 @@ def render_sidebar():
 
     st.sidebar.markdown("---")
     st.sidebar.caption("当前解卦规则以朱熹法取用为主")
-    st.sidebar.caption("AI 输出为结构化四段说明")
+    st.sidebar.caption("两爻变时以上位变爻爻辞为主")
     st.sidebar.caption("历史记录保存至 data/history.json")
 
 
